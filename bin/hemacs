@@ -1,0 +1,307 @@
+#!/bin/sh -e
+#L:
+#L:  MIT License
+#L:  
+#l:  Bug reports, feature requests to gemini|https://harkadev.com/oss
+#l:  Copyright (c) 2022 Harkaitz Agirre, harkaitz.aguirre@gmail.com
+#L:
+#L:  Permission is hereby granted, free of charge, to any person obtaining
+#L:  a copy of this software and associated documentation files (the
+#L:  "Software"), to deal in the Software without restriction, including
+#L:  without limitation the rights to use, copy, modify, merge, publish,
+#L:  distribute, sublicense, and/or sell copies of the Software, and to
+#L:  permit persons to whom the Software is furnished to do so, subject to
+#L:  the following conditions:
+#L:
+#L:  The above copyright notice and this permission notice shall be
+#L:  included in all copies or substantial portions of the Software.
+#L:
+#L:  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#L:  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#L:  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#L:  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#L:  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#L:  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#L:  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+##:
+#h: Usage: $0 ...
+#h:
+#h: This script helps configuring and managing the GNU/Emacs text
+#h: editor by editing [~/.emacs.d/init.el] in a scripted way.
+#h:
+#h: -v            : Print environment variables.
+#h: -P PKG        : Install package.
+#h: -S            : Install basic setup.
+#h:                 - Adds to path dirs in [~/.emacs.d/packages].
+#h:                 - Adds [~/.emacs.d/theme]s to theme path.
+#h:                 - Loads files in [~/.emacs.d/profile.d/*.el].
+#h: -F            : Install base packages.
+#h:                 - Install *flycheck*.
+#h:                 - Install *company*.
+#h:                 - Install *yafolding*.
+#h:                 - Install *yasnippet* that loads [~/.yasnippet]
+#h: -A N < EL     : Add code named `NAME` into `init.el`.
+#h: -I N < EL     : Insert code.
+#h: -B N=TXT < EL : Add button to run standard input code.
+#h: -D N          : Delete code named `NAME` from `init.el`.
+#h: -L            : List code added to `init.el`
+##:
+. hlog
+. hfile
+. hstr
+hemacs() {
+    ## Parse command line.
+    local OPTIND optopt= ops= in_name= in_text= packages= p=
+    while getopts "vSP:A:I:B:D:LF" optopt;do # OPTARG
+	local ops="${ops}${optopt}"
+        case $optopt in
+            P)  local packages="${packages} ${OPTARG}";;
+            A)  local in_name="${OPTARG}";;
+            I)  local in_name="${OPTARG}";;
+            B)  local in_name="`hstr optopt "${OPTARG}"`" \
+                      in_text="`hstr optarg "${OPTARG}"`";;
+            D)  local in_name="$OPTARG";;
+            \?) return 1;;
+        esac
+    done
+    shift $(( $OPTIND - 1 ))
+    ## Emacs package.
+    if test -n "${packages}";then
+        hemacs_install_package ${packages}
+    fi
+    ## Execute commands.
+    case "${ops}" in *v*) hemacs_show_variables      ;; esac
+    case "${ops}" in *S*) hemacs_install_essentials  ;; esac
+    case "${ops}" in *F*) hemacs_install_normal      ;; esac
+    case "${ops}" in
+        *A*) hemacs_add_code "${in_name}";;
+        *I*) hemacs_ins_code "${in_name}";;
+        *B*) hemacs_add_code_button "${in_name}" "${in_text}";;
+        *D*) hemacs_del_code "${in_name}";;
+    esac
+    case "${ops}" in *L*) hemacs_lst_code;; esac
+}
+hemacs_calc_variables() {
+    if test -n "${HEMACS_USER_DIRECTORY}";then
+	true
+    elif test -n "${HOME}";then
+        HEMACS_USER_DIRECTORY="${HOME}/.emacs.d"
+    elif test -n "$APPDATA";then
+        HEMACS_USER_DIRECTORY="${APPDATA}/.emacs.d"
+    fi
+    HEMACS_INIT_FILE="${HEMACS_INIT_FILE:-${HEMACS_USER_DIRECTORY}/init.el}"
+    HEMACS_PACKAGE_DIRECTORY="${HEMACS_PACKAGE_DIRECTORY:-${HEMACS_USER_DIRECTORY}/packages}"
+}
+hemacs_show_variables() {
+    printf '%-30s : %s\n' HEMACS_USER_DIRECTORY     "${HEMACS_USER_DIRECTORY}"
+    printf '%-30s : %s\n' HEMACS_INIT_FILE          "${HEMACS_INIT_FILE}"
+    printf '%-30s : %s\n' HEMACS_PACKAGE_DIRECTORY  "${HEMACS_PACKAGE_DIRECTORY}"
+    printf '%-30s : %s\n' YASNIPPET                 "${YASNIPPET}"
+}
+
+## --- [INIT MANAGER] ----------------------------------------------------------
+hemacs_del_code() {
+    hfile fdel "${HEMACS_INIT_FILE}" "${1}"
+}
+hemacs_add_code() {
+    hfile fadd "${HEMACS_INIT_FILE}" "${1}";
+}
+hemacs_ins_code() {
+    mkdir -p "${HEMACS_USER_DIRECTORY}"
+    touch "${HEMACS_INIT_FILE}"
+    hfile fdel "${HEMACS_INIT_FILE}" "$1"
+    cat > "${HEMACS_INIT_FILE}".tmp <<- EOF
+	;; -- $1 --
+	`cat`
+	;; -- $1 --
+	`cat "$HEMACS_INIT_FILE"`
+	EOF
+    mv "${HEMACS_INIT_FILE}".tmp "${HEMACS_INIT_FILE}"
+}
+hemacs_add_code_button() {
+    local name="${1}" text="${2:-$1}"
+    test -n "${name}" || hlog fatal "Please specify a button name."
+    ## Add custom menu.
+    if test ! -n "`hemacs_lst_code | grep custom-menu-2`";then
+        hemacs_add_code "custom-menu" <<- EOF
+	(define-key-after
+	    global-map
+	    [menu-bar extra]
+	    (cons "Extra" (make-sparse-keymap "Extra"))
+	    'tools )
+	EOF
+    fi
+    ## Add button.
+    hemacs_add_code "${name}-button" <<- EOF
+	(define-key
+	   global-map
+	   [menu-bar extra ${name}-button]
+	   '("${text} (${name})" . ${name}-button))
+	(defun ${name}-button ()
+	   "${name}"
+	   (interactive)
+	   `cat`)
+	EOF
+}
+hemacs_lst_code() {
+    if test -f "${HEMACS_INIT_FILE}";then
+        sed -n 's/.*-- \(.*\) --.*/\1/p' "${HEMACS_INIT_FILE}" | uniq
+    fi
+}
+
+## --- [PACKAGE SYSTEM] --------------------------------------------------------
+hemacs_install_package() {
+    local refresh_file="/tmp/hemacs-refresh-`date '+%m%d'`.el"
+    local package_file="/tmp/hemacs.tmp.el"
+    if test ! -f "${refresh_file}";then
+        hemacs_print_package_code          > "${refresh_file}"
+        echo "(package-refresh-contents)" >> "${refresh_file}"
+        emacs --batch -l "${refresh_file}"
+    fi
+    hemacs_print_package_code > "${package_file}"
+    for n in "$@";do
+        echo "(message \"Installing ${n} (${package_file})...\" ) (package-install '${n})" >> "${package_file}"
+    done
+    emacs -q --batch -l "${package_file}"
+}
+hemacs_print_package_code() {
+    cat <<- EOF
+	(require 'package)
+	;; (setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.2")
+	(setq package-check-signature nil)
+	(setq
+	    package-archives
+	    '( ("melpa-stable" . "http://stable.melpa.org/packages/")
+	       ("gnu"          . "http://elpa.gnu.org/packages/")
+	       ("melpa"        . "http://melpa.org/packages/")
+	      ))
+	(package-initialize)
+	EOF
+}
+
+## --- [ESSENTIALS] ------------------------------------------------------------
+hemacs_install_essentials() {
+    hlog info "Installing basic configuration in ~/.emacs.d/init.el ..."
+    hemacs_ins_code "HEMACS" <<- EOF
+	;; Spell
+	(setq-default ispell-program-name "aspell")
+	
+	;; Mutt
+	(add-to-list 'auto-mode-alist '(".*mutt.*" . message-mode))
+	(setq mail-header-separator "")
+	(add-hook 'message-mode-hook 'auto-fill-mode)
+
+	;; 
+	(require 'ob-shell)
+	(require 'ob-octave)
+	(require 'ob-maxima)
+	(set-default 'truncate-lines t)
+	(setq-default indent-tabs-mode nil)
+	(setq-default c-file-style "k&r")
+	(setq-default c-basic-offset 4)
+	(setq truncate-lines t)
+	(setq gnutls-algorithm-priority "NORMAL:-VERS-TLS1.2")
+	(setq-default
+	 whitespace-line-column 80
+	 whitespace-style       '(face lines-tail))
+	(add-hook 'prog-mode-hook #'whitespace-mode)
+	
+	(require 'tool-bar)
+	(require 'package)
+	
+	;; Disable "modified file" issue when using VirtualBox shared folders.
+	(global-auto-revert-mode nil)
+	
+	;; Make ugly tooltips yellow and nice.
+	(setq x-gtk-use-system-tooltips nil)
+	(custom-set-faces
+	 '(tooltip ((t (:inherit nil :background "lightyellow" :foreground "black")))))
+	
+	;; 
+	(setq frame-title-format '("" "Emacs [%b]"))
+	(setq inhibit-startup-message t)
+	(tool-bar-mode -1)
+	(setq make-backup-files nil) ; stop creating backup~ files
+	(setq auto-save-default nil) ; stop creating #autosave# files
+	(add-to-list 'custom-theme-load-path "~/.emacs.d/themes")
+	(set 'load-path (nconc (file-expand-wildcards "~/.emacs.d/packages/*") load-path))
+	(dolist (filename (file-expand-wildcards "~/.emacs.d/profile.d/*.el"))
+	   (print filename)
+	   (load-file filename))
+	
+	`hemacs_print_package_code`
+	
+	(defun load-auto-file (filename)
+	   (let ((f (locate-dominating-file default-directory filename)))
+	      (when f 
+	         (load-file (concat f filename)))))
+	(setq hemacs-options-loaded nil)
+	;;
+	(set-default 'truncate-lines t)
+	(defun shell-string (&rest args)
+	    (shell-command-to-string
+	        (mapconcat 'identity args " ")))
+	(defun shell-number (&rest args)
+	    (string-to-number
+	        (shell-command-to-string
+	            (mapconcat 'identity args " "))))
+	EOF
+}
+hemacs_install_normal() {
+    hlog info "Installing flycheck ..."
+    hemacs -P flycheck
+    hlog info "Installing 'company' and 'company-quickhelp' ..."
+    hemacs -P company
+    hemacs -P company-quickhelp
+    hemacs -P company-c-headers
+    hlog info "Installing 'yafolding' ..."
+    hemacs -P yafolding
+    hlog info "Installing 'yasnippet' and yasnippet-snippets"
+    hemacs -P "yasnippet" "yasnippet-snippets"
+    hlog info "Editing ~/.emacs.d/init.el ..."
+    hemacs_ins_code BASE <<- EOF
+	
+	;; ====[ COMPANY ]==============================================================
+	(require 'company)
+	(company-quickhelp-mode 1)
+	(add-hook 'after-init-hook 'global-company-mode)
+	;;(setq company-backends (delete 'company-semantic company-backends))
+	(global-set-key [(control return)] 'company-complete)
+	(add-to-list 'company-backends 'company-c-headers)
+	
+	;; ====[ YAFOLDING ]============================================================
+	(global-set-key [f1] #'yafolding-toggle-element)
+	(add-hook 'prog-mode-hook (lambda () (yafolding-mode)))
+	
+	;; ====[ YASNIPPET ]============================================================
+	(dolist (l (file-expand-wildcards "~/.emacs.d/elpa/yasnippet-*"))
+	   (add-to-list 'load-path l))
+	(require 'yasnippet)
+	(add-hook 'prog-mode-hook #'(lambda () (yas-minor-mode) (yas-reload-all)))
+	(add-to-list 'yas-snippet-dirs "~/.yasnippet")
+	(define-key yas-minor-mode-map (kbd "<tab>") nil)
+	(define-key yas-minor-mode-map (kbd "TAB")   nil)
+	(define-key yas-minor-mode-map (kbd "C-c RET") 'yas-expand)
+	(setq yas-indent-line nil)
+	(add-hook 'markdown-mode-hook #'(lambda () (yas-minor-mode) (yas-reload-all)))
+	(add-hook 'html-mode-hook     #'(lambda () (yas-minor-mode) (yas-reload-all)))
+	
+	EOF
+    if test -n "${YASNIPPET}";then
+	hlog info "Linking ~/.yasnippet to ${YASNIPPET} ..."
+	rm -f ~/.yasnippet
+	ln -s "${YASNIPPET}" ~/.yasnippet
+    fi
+}
+
+##------------------------------------------------------------------------------
+hemacs_calc_variables
+if test @"`basename "$0"`" = @"hemacs";then
+    if test -n "$1";then
+        hemacs "$@"
+    else
+        sed -n 's/^ *#h: \{0,1\}//p' "$0" | sed "s|\\\$0|`basename $0`|g"
+        echo ""
+        sed -n 's/^ *#l: \{0,2\}//p' "$0"
+    fi
+fi

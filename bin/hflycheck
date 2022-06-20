@@ -1,0 +1,372 @@
+#!/bin/sh -e
+#L:
+#L:  MIT License
+#L:  
+#l:  Bug reports, feature requests to gemini|https://harkadev.com/oss
+#l:  Copyright (c) 2022 Harkaitz Agirre, harkaitz.aguirre@gmail.com
+#L:
+#L:  Permission is hereby granted, free of charge, to any person obtaining
+#L:  a copy of this software and associated documentation files (the
+#L:  "Software"), to deal in the Software without restriction, including
+#L:  without limitation the rights to use, copy, modify, merge, publish,
+#L:  distribute, sublicense, and/or sell copies of the Software, and to
+#L:  permit persons to whom the Software is furnished to do so, subject to
+#L:  the following conditions:
+#L:
+#L:  The above copyright notice and this permission notice shall be
+#L:  included in all copies or substantial portions of the Software.
+#L:
+#L:  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#L:  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#L:  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#L:  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#L:  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#L:  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#L:  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#h: Usage: $0 SOURCE-FILES...
+#h:        $0 -aP DIRS...
+#h:
+#h: This program helps managing your flycheckers and code parsers.
+#h:
+#h:     -v      : Show configuration.
+#h:     -s      : Skip execution, simply show the command.
+#h:
+#h:     -aP DIR         : Add/list/delete prefixes.
+#h:     -lP             : 
+#h:     -dP DIR         : 
+#h:
+#h:     -aI DIR ...     : Add/list/delete include directories.
+#h:     -lI             : 
+#h:     -dI DIR         :
+#h:     -eI             :
+#h:
+#h:     -aD VAR=VAL ... : Add/list/delete defines.
+#h:     -lD             :
+#h:     -dD             :
+#h:
+#h:     -aT DIR         : Add/list/delete from project directories, this
+#h:     -lT             : list is used by -u to update the TAGS file.
+#h:     -dT DIR         :
+#h:
+#h:     -i emacs : Install `hflycheck` in GNU/Emacs.
+#h:     -u       : Update tags.
+#::
+. hlog
+. hfile
+. hstr
+hflycheck() {
+    ## Parse command line arguments.
+    local OPTIND optopt= ops= ins= upd= f= i= u=
+    while getopts "vsaldePIDTi:u" optopt;do # OPTARG
+        local ops="${ops}${optopt}"
+        case $optopt in
+            v)  hflycheck_show_variables; return 0  ;;
+            s)  export HFLYCHECK_SKIP=y             ;;
+            i)  local ins="${ins} ${OPTARG}"        ;;
+            \?) return 1;;
+        esac
+    done
+    shift $(( $OPTIND - 1 ))
+    ## Install and update.
+    for i in ${ins};do hflycheck_install_"${i}"; done
+    ## Prefixes.
+    case "${ops}" in *aP*) hflycheck_file_add  "${HFLYCHECK_LIST_PREFIX}" "$@"; return 0;; esac
+    case "${ops}" in *lP*) hflycheck_file_list "${HFLYCHECK_LIST_PREFIX}"     ; return 0;; esac
+    case "${ops}" in *dP*) hflycheck_file_del  "${HFLYCHECK_LIST_PREFIX}" "$@"; return 0;; esac
+    ## Headers.
+    case "${ops}" in *aI*) hflycheck_file_add  "${HFLYCHECK_LIST_C_INCDIR}" "$@"; return 0;; esac
+    case "${ops}" in *lI*) hflycheck_file_list "${HFLYCHECK_LIST_C_INCDIR}" "$@"; return 0;; esac
+    case "${ops}" in *dI*) hflycheck_file_del  "${HFLYCHECK_LIST_C_INCDIR}" "$@"; return 0;; esac
+    case "${ops}" in *eI*) hflycheck_file_edit "${HFLYCHECK_LIST_C_INCDIR}"     ; return 0;; esac
+    ## Tags.
+    case "${ops}" in *aT*) hflycheck_file_add  "${HFLYCHECK_LIST_TAGDIRS}"  "$@"; return 0;; esac
+    case "${ops}" in *lT*) hflycheck_file_list "${HFLYCHECK_LIST_TAGDIRS}"  "$@"; return 0;; esac
+    case "${ops}" in *dT*) hflycheck_file_del  "${HFLYCHECK_LIST_TAGDIRS}"  "$@"; return 0;; esac
+    ## Defines.
+    case "${ops}" in *aD*) hflycheck_define_add  "$@"; return 0;; esac
+    case "${ops}" in *lD*) hflycheck_define_list "$@"; return 0;; esac
+    case "${ops}" in *dD*) hflycheck_define_del  "$@"; return 0;; esac
+    ## Update.
+    case "${ops}" in *u*)  hflycheck_install_emacs
+                           hflycheck_update_tags "$@"; return 0;; esac
+    ## Check files.
+    for f in "$@";do
+        case "${f}" in
+            *.h|*.c)                           hflycheck_check_c   "${f}" ;;
+            *.hh|*.hpp|*.hxx|*.cc|*.cpp|*.cxx) hflycheck_check_cxx "${f}" ;;
+            *) local head="`head -c 60 "${f}"`"
+               case "${head}" in
+                   *hcc*) hflycheck_check_c   "${f}" ;;
+               esac
+        esac
+    done
+    
+    
+}
+hflycheck_show_variables() {
+    printf '%-30s : %s\n' HFLYCHECK_DIRECTORY      "${HFLYCHECK_DIRECTORY}"
+    printf '%-30s : %s\n' HFLYCHECK_LINK           "${HFLYCHECK_LINK}"
+    printf '%-30s : %s\n' HFLYCHECK_TAGS           "${HFLYCHECK_TAGS}"
+    printf '%-30s : %s\n' HFLYCHECK_LIST_PREFIX    "${HFLYCHECK_LIST_PREFIX}"
+    printf '%-30s : %s\n' HFLYCHECK_LIST_TAGDIRS   "${HFLYCHECK_LIST_TAGDIRS}"
+    printf '%-30s : %s\n' HFLYCHECK_LIST_C_INCDIR  "${HFLYCHECK_LIST_C_INCDIR}"
+    printf '%-30s : %s\n' HFLYCHECK_LIST_C_DEFINES "${HFLYCHECK_LIST_C_DEFINES}"
+}
+hflycheck_calc_variables() {
+    HFLYCHECK_DIRECTORY="${HFLYCHECK_DIRECTORY:-${HOME}/.hflycheck}"
+    HFLYCHECK_LINK="${HFLYCHECK_LINK:-${HOME}/.hflycheck.sh}"
+    HFLYCHECK_TAGS="${HFLYCHECK_TAGS:-${HOME}/.tags}"
+    HFLYCHECK_LIST_PREFIX="${HFLYCHECK_LIST_PREFIX:-${HFLYCHECK_DIRECTORY}/prefix.lst}"
+    HFLYCHECK_LIST_TAGDIRS="${HFLYCHECK_LIST_TAGDIRS:-${HFLYCHECK_DIRECTORY}/tagdirs.lst}"
+    HFLYCHECK_LIST_C_INCDIR="${HFLYCHECK_LIST_C_INCDIR:-${HFLYCHECK_DIRECTORY}/incdir.lst}"
+    HFLYCHECK_LIST_C_DEFINES="${HFLYCHECK_LIST_C_DEFINES:-${HFLYCHECK_DIRECTORY}/defines.lst}"
+    
+}
+## -----------------------------------------------------------------------------
+## ---- CHECKERS ---------------------------------------------------------------
+## -----------------------------------------------------------------------------
+hflycheck_check_c() {
+    local d= f= cflags=
+    for d in `hflycheck_calc_sys_incdirs`;do
+        local cflags="${cflags} -isystem ${d}"
+    done
+    for d in `hflycheck_calc_prj_incdirs "$@"`;do
+        local cflags="${cflags} -I${d}"
+    done
+    for d in `hflycheck_define_list`;do
+        local cflags="${cflags} -D${d}"
+    done
+    hflycheck_exec            \
+        gcc                   \
+        -x c                  \
+        -S -o /dev/null "$@"  \
+        -Wall                 \
+        -DFLYCHECK            \
+        ${cflags}
+}
+hflycheck_check_cxx() {
+    local d= cflags=
+    for d in `hflycheck_calc_incdirs`;do
+        local cflags="${cflags} -isystem ${d}"
+    done
+    for d in `hflycheck_calc_prj_incdirs "$@"`;do
+        local cflags="${cflags} -I${d}"
+    done
+    for d in `hflycheck_define_list`;do
+        local cflags="${cflags} -D${d}"
+    done
+    hflycheck_exec            \
+        g++                   \
+        -x c++                \
+        -S -o /dev/null "$@"  \
+        -Wall                 \
+        -DFLYCHECK            \
+        ${cflags}
+}
+hflycheck_update_tags() {
+    local d=
+    echo -n > "${HFLYCHECK_TAGS}"
+    hflycheck_file_cat "${HFLYCHECK_LIST_TAGDIRS}" | while read d;do
+        hlog info "Scanning ${d} ..."
+        find "${d}" -name "*.[ch]" -print | etags -l c -o "${HFLYCHECK_TAGS}" -
+    done
+    hlog info "Tags: `wc -l < "${HFLYCHECK_TAGS}"`"
+}
+
+hflycheck_calc_prj_incdirs() {
+    local f=
+    #for f in "$@";do
+    #    local d="`dirname "${f}"`"
+    #    echo "${d}"
+    #    echo "${d}/.."
+    #done
+    echo "./include"
+    echo "../include"
+    echo "../../include"
+}
+hflycheck_calc_sys_incdirs() {
+    local p= d=
+    for p in `hflycheck_file_cat "${HFLYCHECK_LIST_PREFIX}"`;do
+        test ! -d "${p}/include" || echo "${p}/include"
+    done
+    for d in `hflycheck_file_cat "${HFLYCHECK_LIST_C_INCDIR}"`;do
+        test ! -d "${d}" || echo "${d}"
+    done
+}
+
+
+hflycheck_install_link() {
+    hfile create "${HFLYCHECK_LINK}" <<-EOF
+	#!/bin/sh -e
+	if which hflycheck >/dev/null 2>&1;then
+	    hflycheck "\$@"
+	fi
+	EOF
+    chmod +x "${HFLYCHECK_LINK}"
+}
+hflycheck_install_emacs() {
+    local ecf="${HOME}/.emacs.d/init.el" scf="${HOME}/.emacs.d/usemantic.el"
+    hflycheck_install_link
+    if test ! -f "${ecf}";then
+        return 0
+    fi
+    hlog debug "${ecf}: Adding 'flycheck-c' ..."
+    hfile fadd "${ecf}" "flycheck-c" <<-EOF
+	(load-library "flycheck")
+	(flycheck-define-checker gen-flycheck-c "C checker."
+	    :command ("${HFLYCHECK_LINK}" source-inplace)
+	    :error-patterns
+	        ((warning line-start (file-name) ":" line ":" column
+	         ": warning: " (message) line-end)
+	         (error line-start (file-name) ":" line ":" column
+	         ": error: " (message) line-end))
+	    :modes (c-mode))
+	(flycheck-define-checker gen-flycheck-cxx "C++ checker."
+	    :command ("${HFLYCHECK_LINK}" source-inplace)
+	    :error-patterns
+	        ((warning line-start (file-name) ":" line ":" column
+	         ": warning: " (message) line-end)
+	         (error line-start (file-name) ":" line ":" column
+	         ": error: " (message) line-end))
+	    :modes (c++-mode))
+	(add-to-list 'flycheck-checkers 'gen-flycheck-c)
+	(add-to-list 'flycheck-checkers 'gen-flycheck-cxx)
+	(add-hook 'c-mode-hook   'flycheck-mode)
+	(add-hook 'c++-mode-hook 'flycheck-mode)
+	EOF
+    hlog debug "${ecf}: Adding 'company-config' ..."
+    hfile fadd "${ecf}" "company-config" <<-EOF
+	(setq tags-table-list '("~/.tags"))
+	(defun enable-semantic ()
+	    "Reload semantic."
+	    (interactive)
+	    (load-library "semantic")
+	    (semantic-mode)
+	    (semantic-decoration-mode)
+	    (semantic-idle-summary-mode)
+	    (load-file "~/.emacs.d/usemantic.el"))
+	EOF
+    hlog debug "${ecf}: Adding 'speedbar' ..."
+    hfile fadd "${ecf}" "speedbar" <<-EOF
+	(setq speedbar-tag-hierarchy-method 'speedbar-simple-group-tag-hierarchy)
+	(add-hook 'speedbar-load-hook (lambda () (require 'semantic/sb)))
+	EOF
+    hlog debug "${scf}: Editting ..."
+    if true;then
+        printf '%s\n' "(semantic-reset-system-include 'c-mode)"
+        printf '%s\n' "(semantic-reset-system-include 'c++-mode)"
+        for d in `hflycheck_calc_prj_incdirs` `hflycheck_calc_sys_incdirs`;do
+            printf '    (semantic-add-system-include "%s")\n' "${d}"
+        done
+        printf "    (setq semantic-lex-c-preprocessor-symbol-map '("
+        hflycheck_define_list | while read l;do
+            local var="`hstr optopt "${l}"`"
+            local val="`hstr optarg "${l}"`"
+            printf '\n        (%-20s . %s)' "\"${var}\"" "`hstr escape2 "${val}"`"
+        done
+        printf ')'
+        printf ')\n'
+    fi > "${scf}"
+}
+
+
+
+
+
+## -----------------------------------------------------------------------------
+## ---- UTILITIES --------------------------------------------------------------
+## -----------------------------------------------------------------------------
+hflycheck_file_add() { # FILE LINES
+    local f="$1" pwd="`pwd`"
+    shift
+    mkdir -p "`dirname "${f}"`"
+    for a in "$@";do
+        if test @"${a}" = @".";then
+            local a="`pwd`"
+        fi
+        if ! grep "^${a}\$" "${f}" >/dev/null 2>&1;then
+            hlog info "Adding ${a} ..."
+            echo "${a}" >> "${f}"
+        else
+            hlog info "Already added ${a} ..."
+        fi
+    done
+}
+hflycheck_file_list() { # FILE
+    local f="$1"
+    if test -f "${f}";then
+        cat "${f}"
+    fi
+}
+hflycheck_file_del() { # FILE LINES...
+    local f="$1"
+    if test ! -f "${f}";then return 0;fi
+    shift
+    for a in "$@";do
+        if grep "^${a}\$" "${f}" >/dev/null 2>&1;then
+            hlog info "Deleting ${a} ..."
+            sed -i'.tmp' "\\|^${a}\$|d" "${f}"
+        else
+            hlog info "Already added ${a} ..."
+        fi
+    done
+}
+hflycheck_file_cat() { # FILE
+    test ! -f "${1}" || cat "${1}"
+}
+hflycheck_file_edit() { # FILE
+    ${EDITOR:-emacs} "${1}"
+}
+hflycheck_exec() { # COMMAND...
+    if test @"${HFLYCHECK_SKIP}" = @"y";then
+        echo "$@"
+    else
+        env "$@"
+    fi
+}
+hflycheck_define_add() {
+    local a= f="${HFLYCHECK_LIST_C_DEFINES}"
+    mkdir -p "`dirname "${f}"`"
+    touch "${f}"
+    for a in "$@";do
+        local var="`hstr optopt "${a}"`"
+        local val="`hstr optarg "${a}"`"
+        if grep "^${var}=" "${f}" >/dev/null 2>&1;then
+            hlog info "${f}: Editing ${var}=${val} ..."
+            sed -i'.tmp' "/^${var}=/d" "${f}"
+        else
+            hlog info "${f}: Adding ${var}=${val}"
+        fi
+        printf '%s=%s\n' "${var}" "${val}" >> "${f}"
+    done
+}
+hflycheck_define_list() {
+    test ! -f "${HFLYCHECK_LIST_C_DEFINES}" || cat "${HFLYCHECK_LIST_C_DEFINES}"
+}
+hflycheck_define_del() {
+    local var= f="${HFLYCHECK_LIST_C_DEFINES}"
+    if test ! -f "${f}";then return 0;fi
+    for var in "$@";do
+        if grep "^${var}=" "${f}" >/dev/null 2>&1;then
+            hlog info "${f}: Deleting ${var} ..."
+            sed -i'.tmp' "/^${var}=/d" "${f}"
+        else
+            hlog info "${f}: Skipping ${var} ... (Not defined)"
+        fi
+    done
+}
+
+## -----------------------------------------------------------------------------
+hflycheck_calc_variables
+case "`basename "$0"`" in
+    hflycheck|flycheck-gcc|flycheck-g++)
+        if test -n "$1";then
+            hflycheck "$@"
+        else
+            sed -n 's/^ *#h: \{0,1\}//p' "$0" | sed "s|\\\$0|`basename $0`|g"
+            echo ""
+            sed -n 's/^ *#l: \{0,2\}//p' "$0"
+        fi
+        ;;
+esac
+
