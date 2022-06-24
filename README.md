@@ -2,6 +2,10 @@
 
 GNU Emacs configuration scripts.
 
+## Prerequisites
+
+- [sh-hutil](https://github.com/harkaitz/sh-hutil) : Bash script utility library.
+
 ## Help
 
 hemacs
