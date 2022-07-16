@@ -128,22 +128,22 @@ hflycheck_calc_variables() {
 hflycheck_check_c() {
     local d= f= cflags=
     for d in `hflycheck_calc_sys_incdirs`; do
-        local cflags="${cflags} -isystem ${d}"
+        cflags="${cflags} -isystem ${d}"
     done
     for d in `hflycheck_calc_prj_incdirs "$@"`; do
-        local cflags="${cflags} -I${d}"
+        cflags="${cflags} -I${d}"
     done
     for d in `hflycheck_define_list`; do
-        local cflags="${cflags} -D${d}"
+        cflags="${cflags} -D${d}"
     done
-    local cc="`sed -n 's|.*hflycheck:cc: *||p' "$@" | head -n 1`"
-
-             
+    local cc="` sed -n 's|.*hflycheck:cc: *||p'             "$@" | head -n 1`"
+    local std="`sed -n 's|.*hflycheck:std:\([^ ]*\).*|\1|p' "$@" | head -n 1`"
+    cflags="${cflags} -std=${std:-c99}"
     hflycheck_exec            \
         ${cc:-gcc}            \
         -x c                  \
         -S -o /dev/null "$@"  \
-        -Wall                 \
+        -Wall -Wpedantic -Wextra      \
         -DFLYCHECK            \
         ${cflags}
 }
@@ -162,7 +162,7 @@ hflycheck_check_cxx() {
         g++                   \
         -x c++                \
         -S -o /dev/null "$@"  \
-        -Wall                 \
+        -Wall -Wpedantic      \
         -DFLYCHECK            \
         ${cflags}
 }
